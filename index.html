@@ -56,7 +56,7 @@ const COUNTRIES={
 const DAYS=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const STATUS={scheduled:'مجدولة',present:'حضر',absent:'غاب',excused:'غياب بعذر',cancelled:'أُلغيت'};
 
-let S={user:null,tz:'Africa/Cairo',students:[],slots:[],lessons:[],goals:[],tab:'today',weekOffset:0};
+let S={user:null,tz:'Africa/Cairo',students:[],slots:[],lessons:[],goals:[],tab:'today',weekOffset:0,month:null};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -84,6 +84,20 @@ function diffLabel(stz){
   if(!h)return 'نفس توقيتك';
   return `${Math.abs(h)} ساعة ${h>0?'أمامك':'خلفك'}`;
 }
+const curMonth=()=>{const p=parts(new Date(),S.tz);return `${p.year}-${p.month}-01`};
+const monthLabel=m=>new Intl.DateTimeFormat('ar-EG',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(m+'T00:00:00Z'));
+const shiftMonth=(m,n)=>{const d=new Date(m+'T00:00:00Z');d.setUTCMonth(d.getUTCMonth()+n);return d.toISOString().slice(0,10)};
+function pace(g){
+  const t=+g.target_amount||0,d=+g.done_amount||0;if(!t||!g.month)return null;
+  const cm=curMonth();let exp;
+  if(g.month<cm)exp=t;else if(g.month>cm)exp=0;
+  else{const p=parts(new Date(),S.tz),dim=new Date(Date.UTC(+p.year,+p.month,0)).getUTCDate();exp=t*(+p.day/dim)}
+  if(d>=t)return {c:'var(--ok)',l:'مكتمل ✅',exp};
+  if(d>=exp)return {c:'var(--ok)',l:'ماشي كويس',exp};
+  if(d>=exp*0.8)return {c:'var(--wn)',l:'متأخر شوية',exp};
+  return {c:'var(--no)',l:'متأخر',exp};
+}
+const bar=(d,t,c)=>`<div style="background:var(--br);border-radius:99px;height:10px;overflow:hidden;margin:6px 0"><div style="width:${t?Math.min(100,d/t*100):0}%;background:${c};height:100%"></div></div>`;
 const stu=id=>S.students.find(s=>s.id===id);
 const dayKey=(d,tz)=>{const p=parts(d,tz);return `${p.year}-${p.month}-${p.day}`};
 
@@ -168,15 +182,22 @@ function lessonCard(l){
   <button class="sm no" onclick="setSt('${l.id}','absent')">غاب</button>
   <button class="sm" onclick="setSt('${l.id}','excused')">بعذر</button>
   <button class="sm" onclick="setSt('${l.id}','cancelled')">إلغاء</button>
-  <button class="sm" onclick="lessonNote('${l.id}')">ملاحظة</button>
+  <button class="sm" onclick="lessonLog('${l.id}')">تسجيل ما تم</button>
   <button class="sm" onclick="delLesson('${l.id}')">🗑</button></div>
+  ${l.position||l.amount_done?`<div style="margin-top:6px">📖 وصلنا لـ: <b>${esc(l.position||'—')}</b>${l.amount_done?` · أنجزنا ${l.amount_done} ${esc(S.goals.find(g=>g.id===l.goal_id)?.unit||'')}`:''}</div>`:''}
   ${l.note?`<div class="mut" style="margin-top:6px">📝 ${esc(l.note)}</div>`:''}</div>`;
+}
+function clocks(){
+  const n=new Date();
+  return `<div class="card"><b>🕒 الآن</b> <span class="mut">(عندك ${fmtT(n,S.tz)})</span><div class="grid" style="margin-top:8px">`+
+  S.students.filter(s=>s.status==='active').map(s=>{const h=+parts(n,s.timezone).hour,night=h>=23||h<6;
+    return `<div><b>${esc(s.name)}</b><br><span ${night?'style="color:var(--no)"':''}>${fmtT(n,s.timezone)}${night?' 🌙':''}</span> <span class="mut">${diffLabel(s.timezone)}</span></div>`}).join('')+`</div></div>`;
 }
 function vToday(){
   const k=dayKey(new Date(),S.tz);
   const ls=S.lessons.filter(l=>dayKey(new Date(l.starts_at),S.tz)===k);
   return `<div class="row" style="margin:10px 0"><h2 style="margin:0">حصص اليوم</h2><span class="sp"></span>
-    <button class="sm" onclick="addLesson()">+ حصة</button></div>`+(ls.map(lessonCard).join('')||'<p class="mut">لا حصص اليوم</p>');
+    <button class="sm" onclick="addLesson()">+ حصة</button></div>`+clocks()+(ls.map(lessonCard).join('')||'<p class="mut">لا حصص اليوم</p>');
 }
 function vWeek(){
   const ws=weekStart(S.weekOffset),we=new Date(ws);we.setUTCDate(we.getUTCDate()+7);
@@ -193,22 +214,37 @@ function vStudents(){
   return `<div class="row" style="margin:10px 0"><h2 style="margin:0">الطلاب (${S.students.length})</h2><span class="sp"></span>
   <button class="pr sm" onclick="studentForm()">+ طالب</button></div>`+S.students.map(s=>{
     const sl=S.slots.filter(x=>x.student_id===s.id);
-    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${esc(s.country||'')} · ${esc(s.timezone)} · ${diffLabel(s.timezone)}</span>
+    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${esc(s.country||'')} · ${esc(s.timezone)} · ${diffLabel(s.timezone)} · الآن عنده ${fmtT(new Date(),s.timezone)}</span>
     <span class="sp"></span><button class="sm" onclick="studentForm('${s.id}')">تعديل</button></div>
     <div class="mut">💰 ${s.price??'—'} ${esc(s.currency||'')} / ${s.price_unit==='month'?'شهر':'حصة'} · ${s.phone?`<span dir="ltr">${esc(s.phone)}</span>`:'بلا رقم'} ${s.status!=='active'?`· <b>${s.status==='paused'?'متوقف مؤقتا':'متوقف'}</b>`:''}</div>
     <div style="margin-top:6px">${sl.map(x=>`<span class="tag">${DAYS[x.day_of_week]} ${x.start_time.slice(0,5)} (${x.duration_min}د) <a href="#" onclick="delSlot('${x.id}');return false">✕</a></span> `).join('')}
     <button class="sm" onclick="slotForm('${s.id}')">+ موعد ثابت</button></div></div>`}).join('');
 }
 function vGoals(){
-  return `<div class="row" style="margin:10px 0"><h2 style="margin:0">الأهداف والخطة</h2></div>`+S.students.map(s=>{
-    const g=S.goals.filter(x=>x.student_id===s.id);
-    const done=g.filter(x=>x.status==='done').length;
-    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${done}/${g.length} منجز</span><span class="sp"></span>
-    <button class="sm" onclick="goalForm('${s.id}')">+ هدف</button></div>`+g.map(x=>`<div class="row" style="margin-top:6px">
-      <select style="width:auto" onchange="goalSt('${x.id}',this.value)">${['todo','doing','done'].map(v=>`<option value="${v}" ${x.status===v?'selected':''}>${{todo:'لم يبدأ',doing:'جارٍ',done:'تم'}[v]}</option>`).join('')}</select>
-      <span style="${x.status==='done'?'text-decoration:line-through;color:var(--mut)':''}">${esc(x.title)}</span>
-      ${x.target_date?`<span class="mut">حتى ${x.target_date}</span>`:''}<span class="sp"></span>
-      <button class="sm" onclick="delGoal('${x.id}')">🗑</button></div>${x.details?`<div class="mut">${esc(x.details)}</div>`:''}`).join('')+`</div>`}).join('');
+  const m=S.month||(S.month=curMonth());
+  const all=S.goals.filter(g=>g.month===m);
+  const tot=all.filter(g=>+g.target_amount),sd=tot.reduce((a,g)=>a+Math.min(+g.done_amount,+g.target_amount),0),st=tot.reduce((a,g)=>a+ +g.target_amount,0);
+  const behind=tot.filter(g=>['متأخر'].includes(pace(g)?.l)).length;
+  return `<div class="row" style="margin:10px 0"><button class="sm" onclick="S.month=shiftMonth(S.month,-1);render()">→</button>
+  <h2 style="margin:0">${monthLabel(m)}</h2><button class="sm" onclick="S.month=shiftMonth(S.month,1);render()">←</button>
+  <span class="sp"></span><button class="sm" onclick="S.month=curMonth();render()">الشهر الحالي</button></div>
+  <div class="card"><b>الإجمالي: ${st?Math.round(sd/st*100):0}%</b> <span class="mut">(${tot.length} هدف بمقدار محدد${behind?` · ${behind} متأخر`:''})</span>${bar(sd,st,'var(--pr)')}</div>`+
+  S.students.filter(s=>s.status==='active'||S.goals.some(g=>g.student_id===s.id&&g.month===m)).map(s=>{
+    const g=all.filter(x=>x.student_id===s.id);
+    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="sp"></span>
+    <button class="sm" onclick="goalForm('${s.id}')">+ هدف للشهر</button></div>`+(g.map(x=>{
+      const pc=pace(x),t=+x.target_amount||0,d=+x.done_amount||0;
+      const last=S.lessons.filter(l=>l.goal_id===x.id&&l.position).sort((a,b)=>b.starts_at.localeCompare(a.starts_at))[0];
+      return `<div style="border-top:1px solid var(--br);margin-top:10px;padding-top:8px">
+      <div class="row"><b>${x.book?'📘 '+esc(x.book)+' — ':''}${esc(x.title)}</b><span class="sp"></span>
+      ${pc?`<span class="tag" style="color:${pc.c};border-color:${pc.c}">${pc.l}</span>`:''}
+      <select style="width:auto" onchange="goalSt('${x.id}',this.value)">${['todo','doing','done'].map(v=>`<option value="${v}" ${x.status===v?'selected':''}>${{todo:'لم يبدأ',doing:'جارٍ',done:'تم'}[v]}</option>`).join('')}</select></div>
+      ${t?`${bar(d,t,pc?.c||'var(--pr)')}<div class="row mut"><span>${d} / ${t} ${esc(x.unit||'')} (${Math.round(d/t*100)}%)</span>${pc&&d<t?`<span>· المفروض الآن ≈ ${Math.round(pc.exp)}</span>`:''}<span class="sp"></span>
+      <button class="sm" onclick="addProg('${x.id}')">+ تقدم</button></div>`:''}
+      ${x.start_position?`<div class="mut">بدأنا من: ${esc(x.start_position)}</div>`:''}
+      ${last?`<div class="mut">آخر وصول: <b>${esc(last.position)}</b></div>`:''}
+      ${x.details?`<div class="mut">${esc(x.details)}</div>`:''}
+      <div class="row"><button class="sm" onclick="goalForm('${s.id}','${x.id}')">تعديل</button><button class="sm" onclick="delGoal('${x.id}')">🗑</button></div></div>`}).join('')||'<p class="mut">لا أهداف لهذا الشهر</p>')+`</div>`}).join('');
 }
 function vStats(){
   return `<h2>إحصائيات الحضور</h2>`+S.students.map(s=>{
@@ -293,21 +329,51 @@ async function saveLesson(){
   if(!err(r)){close();load()}
 }
 async function setSt(id,status){const r=await sb.from('tolaab_lessons').update({status}).eq('id',id);if(!err(r))load()}
-async function lessonNote(id){
-  const l=S.lessons.find(x=>x.id===id),v=prompt('ملاحظة الحصة (ما تم، الواجب...)',l.note||'');if(v===null)return;
-  const r=await sb.from('tolaab_lessons').update({note:v||null}).eq('id',id);if(!err(r))load();
+function lessonLog(id){
+  const l=S.lessons.find(x=>x.id===id),gs=S.goals.filter(g=>g.student_id===l.student_id&&g.status!=='done');
+  modal(`<h3>تسجيل الحصة — ${esc(stu(l.student_id).name)}</h3>
+  <label>الهدف المرتبط (كتاب/خطة)</label><select id="ll_g"><option value="">— بدون —</option>
+  ${gs.map(g=>`<option value="${g.id}" ${l.goal_id===g.id?'selected':''}>${esc(g.book?g.book+' — ':'')}${esc(g.title)}</option>`).join('')}</select>
+  <div class="grid"><div><label>أنجزنا اليوم (عدد)</label><input id="ll_a" type="number" step="0.5" value="${l.amount_done||''}"></div>
+  <div><label>وصلنا لـ (صفحة/درس/آية)</label><input id="ll_p" value="${esc(l.position||'')}"></div></div>
+  <label>ملاحظة / واجب</label><textarea id="ll_n" rows="2">${esc(l.note||'')}</textarea>
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveLog('${id}')">حفظ</button><button onclick="close()">إلغاء</button></div>`);
+}
+async function saveLog(id){
+  const l=S.lessons.find(x=>x.id===id),gid=$('#ll_g').value||null,amt=+$('#ll_a').value||0,pos=$('#ll_p').value.trim()||null;
+  let r=await sb.from('tolaab_lessons').update({goal_id:gid,amount_done:amt,position:pos,note:$('#ll_n').value||null}).eq('id',id);
+  if(err(r))return;
+  // تعديل تقدم الأهداف: نرجّع القديم ونضيف الجديد
+  const adj=async(goalId,delta)=>{const g=S.goals.find(x=>x.id===goalId);if(!g||!delta)return;
+    await sb.from('tolaab_goals').update({done_amount:Math.max(0,(+g.done_amount||0)+delta),...(pos&&goalId===gid?{start_position:g.start_position}:{})}).eq('id',goalId)};
+  if(l.goal_id&&l.goal_id!==gid){await adj(l.goal_id,-(+l.amount_done||0));await adj(gid,amt)}
+  else if(gid)await adj(gid,amt-(+l.amount_done||0));
+  close();load();
 }
 async function delLesson(id){if(confirm('حذف الحصة؟')){const r=await sb.from('tolaab_lessons').delete().eq('id',id);if(!err(r))load()}}
 
-function goalForm(sid){
-  modal(`<h3>هدف جديد — ${esc(stu(sid).name)}</h3><label>الهدف</label><input id="g_t">
-  <label>تفاصيل / خطة</label><textarea id="g_d" rows="3"></textarea><label>تاريخ مستهدف</label><input id="g_dt" type="date">
-  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveGoal('${sid}')">حفظ</button><button onclick="close()">إلغاء</button></div>`);
+function goalForm(sid,id){
+  const g=id?S.goals.find(x=>x.id===id):{title:'',book:'',unit:'صفحة',target_amount:'',start_position:'',details:'',target_date:'',month:S.month||curMonth()};
+  modal(`<h3>${id?'تعديل الهدف':'هدف شهري'} — ${esc(stu(sid).name)}</h3>
+  <label>الكتاب / المنهج</label><input id="g_b" value="${esc(g.book)}" placeholder="مثال: متن الجزرية">
+  <label>الهدف</label><input id="g_t" value="${esc(g.title)}" placeholder="مثال: حفظ 20 بيت">
+  <div class="grid"><div><label>المقدار المستهدف</label><input id="g_n" type="number" step="0.5" value="${g.target_amount||''}"></div>
+  <div><label>الوحدة</label><input id="g_u" value="${esc(g.unit)}" placeholder="صفحة / درس / بيت"></div>
+  <div><label>الشهر</label><input id="g_m" type="month" value="${g.month.slice(0,7)}"></div></div>
+  <label>بدأنا من (اختياري)</label><input id="g_s" value="${esc(g.start_position)}">
+  <label>تفاصيل / خطة</label><textarea id="g_d" rows="2">${esc(g.details)}</textarea>
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveGoal('${sid}','${id||''}')">حفظ</button><button onclick="close()">إلغاء</button></div>`);
 }
-async function saveGoal(sid){
-  if(!$('#g_t').value.trim())return;
-  const r=await sb.from('tolaab_goals').insert({student_id:sid,title:$('#g_t').value.trim(),details:$('#g_d').value||null,target_date:$('#g_dt').value||null});
-  if(!err(r)){close();load()}
+async function saveGoal(sid,id){
+  if(!$('#g_t').value.trim())return alert('اكتب الهدف');
+  const row={student_id:sid,title:$('#g_t').value.trim(),book:$('#g_b').value.trim()||null,unit:$('#g_u').value||'صفحة',
+    target_amount:+$('#g_n').value||0,month:$('#g_m').value+'-01',start_position:$('#g_s').value||null,details:$('#g_d').value||null};
+  const r=id?await sb.from('tolaab_goals').update(row).eq('id',id):await sb.from('tolaab_goals').insert(row);
+  if(!err(r)){close();S.month=row.month;load()}
+}
+async function addProg(id){
+  const g=S.goals.find(x=>x.id===id),v=prompt('كم أنجزنا إضافةً؟ ('+(g.unit||'')+')');const n=parseFloat(v);if(!n)return;
+  const r=await sb.from('tolaab_goals').update({done_amount:Math.max(0,(+g.done_amount||0)+n)}).eq('id',id);if(!err(r))load();
 }
 async function goalSt(id,status){const r=await sb.from('tolaab_goals').update({status}).eq('id',id);if(!err(r))load()}
 async function delGoal(id){const r=await sb.from('tolaab_goals').delete().eq('id',id);if(!err(r))load()}
