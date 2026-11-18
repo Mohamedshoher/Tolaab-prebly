@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>جدول الطلاب</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1d2330;--mut:#6b7385;--br:#e2e5ec;--pr:#2563eb;--ok:#16a34a;--no:#dc2626;--wn:#d97706}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#1a1f2b;--tx:#e8ebf2;--mut:#8f99ad;--br:#2b3242;--pr:#5b8cff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.6 system-ui,"Segoe UI",Tahoma,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--br);position:sticky;top:0;z-index:5}
+h1{font-size:18px;margin:0}
+nav{display:flex;gap:6px;padding:10px 16px;overflow-x:auto}
+nav button{white-space:nowrap}
+main{padding:0 16px 40px;max-width:980px;margin:auto}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:var(--card);border:1px solid var(--br);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.pr,nav button.on{background:var(--pr);border-color:var(--pr);color:#fff}
+button.ok{background:var(--ok);border-color:var(--ok);color:#fff}
+button.no{background:var(--no);border-color:var(--no);color:#fff}
+button.sm{padding:3px 9px;font-size:13px}
+input,select,textarea{background:var(--bg);border:1px solid var(--br);border-radius:8px;padding:7px 10px;width:100%}
+label{display:block;font-size:13px;color:var(--mut);margin:8px 0 3px}
+.card{background:var(--card);border:1px solid var(--br);border-radius:12px;padding:14px;margin:10px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.mut{color:var(--mut);font-size:13px}
+.tag{display:inline-block;border-radius:99px;padding:1px 9px;font-size:12px;border:1px solid var(--br)}
+.t-present{color:var(--ok)}.t-absent{color:var(--no)}.t-excused{color:var(--wn)}
+.times{display:flex;gap:14px;flex-wrap:wrap}
+.times b{font-size:16px}
+dialog{border:1px solid var(--br);border-radius:14px;background:var(--card);color:var(--tx);width:min(560px,94vw);padding:16px}
+dialog::backdrop{background:#0008}
+.sp{flex:1}
+#msg{color:var(--no);font-size:13px;min-height:18px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const SB_URL='https://hbxjtouharriifpninxp.supabase.co';
+const SB_KEY='sb_publishable_jFscZojUr-MXM7yMMgYGdQ_xS_Zpzwq';
+const sb=supabase.createClient(SB_URL,SB_KEY);
+
+/* الدول والمناطق الزمنية (الأساسية، ويمكن كتابة أي منطقة IANA يدويا) */
+const COUNTRIES={
+'السعودية':'Asia/Riyadh','مصر':'Africa/Cairo','الإمارات':'Asia/Dubai','الكويت':'Asia/Kuwait','قطر':'Asia/Qatar',
+'البحرين':'Asia/Bahrain','عُمان':'Asia/Muscat','الأردن':'Asia/Amman','العراق':'Asia/Baghdad','المغرب':'Africa/Casablanca',
+'الجزائر':'Africa/Algiers','تونس':'Africa/Tunis','ليبيا':'Africa/Tripoli','السودان':'Africa/Khartoum','تركيا':'Europe/Istanbul',
+'بريطانيا':'Europe/London','ألمانيا':'Europe/Berlin','فرنسا':'Europe/Paris','السويد':'Europe/Stockholm','هولندا':'Europe/Amsterdam',
+'أمريكا (نيويورك)':'America/New_York','أمريكا (شيكاغو)':'America/Chicago','أمريكا (لوس أنجلوس)':'America/Los_Angeles',
+'كندا (تورنتو)':'America/Toronto','أستراليا (سيدني)':'Australia/Sydney','ماليزيا':'Asia/Kuala_Lumpur','إندونيسيا (جاكرتا)':'Asia/Jakarta',
+'باكستان':'Asia/Karachi','الهند':'Asia/Kolkata','جنوب أفريقيا':'Africa/Johannesburg'};
+const DAYS=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+const STATUS={scheduled:'مجدولة',present:'حضر',absent:'غاب',excused:'غياب بعذر',cancelled:'أُلغيت'};
+
+let S={user:null,tz:'Africa/Cairo',students:[],slots:[],lessons:[],goals:[],tab:'today',weekOffset:0};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- الوقت والمناطق ---------- */
+function parts(date,tz){
+  const f=new Intl.DateTimeFormat('en-CA',{timeZone:tz,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',weekday:'short'});
+  const o={};f.formatToParts(date).forEach(p=>o[p.type]=p.value);return o;
+}
+/* تحويل وقت محلي (في منطقة tz) إلى لحظة UTC */
+function zonedToUtc(y,m,d,hh,mm,tz){
+  let t=Date.UTC(y,m-1,d,hh,mm);
+  for(let i=0;i<3;i++){
+    const p=parts(new Date(t),tz);
+    const got=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute);
+    t+=Date.UTC(y,m-1,d,hh,mm)-got;
+  }
+  return new Date(t);
+}
+const fmt=(d,tz)=>new Intl.DateTimeFormat('ar-EG',{timeZone:tz,weekday:'long',day:'numeric',month:'short',hour:'numeric',minute:'2-digit',hour12:true}).format(d);
+const fmtT=(d,tz)=>new Intl.DateTimeFormat('ar-EG',{timeZone:tz,hour:'numeric',minute:'2-digit',hour12:true}).format(d);
+const fmtD=(d,tz)=>new Intl.DateTimeFormat('ar-EG',{timeZone:tz,weekday:'long',day:'numeric',month:'long'}).format(d);
+function diffLabel(stz){
+  const n=new Date(),a=parts(n,S.tz),b=parts(n,stz);
+  const h=(Date.UTC(+b.year,+b.month-1,+b.day,+b.hour,+b.minute)-Date.UTC(+a.year,+a.month-1,+a.day,+a.hour,+a.minute))/36e5;
+  if(!h)return 'نفس توقيتك';
+  return `${Math.abs(h)} ساعة ${h>0?'أمامك':'خلفك'}`;
+}
+const stu=id=>S.students.find(s=>s.id===id);
+const dayKey=(d,tz)=>{const p=parts(d,tz);return `${p.year}-${p.month}-${p.day}`};
+
+/* ---------- البيانات ---------- */
+async function load(){
+  const [a,b,c,d,e]=await Promise.all([
+    sb.from('tolaab_settings').select('*').maybeSingle(),
+    sb.from('tolaab_students').select('*').order('name'),
+    sb.from('tolaab_slots').select('*').order('day_of_week').order('start_time'),
+    sb.from('tolaab_lessons').select('*').order('starts_at'),
+    sb.from('tolaab_goals').select('*').order('created_at')]);
+  if(a.data)S.tz=a.data.teacher_tz;
+  else await sb.from('tolaab_settings').insert({teacher_tz:S.tz});
+  S.students=b.data||[];S.slots=c.data||[];S.lessons=d.data||[];S.goals=e.data||[];
+  render();
+}
+function err(r){if(r.error){alert('خطأ: '+r.error.message);return true}}
+
+/* توليد حصص أسبوع من المواعيد الثابتة (بتوقيتك) */
+function weekStart(off){
+  const p=parts(new Date(),S.tz);
+  const wd={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6}[p.weekday];
+  const base=new Date(Date.UTC(+p.year,+p.month-1,+p.day));
+  base.setUTCDate(base.getUTCDate()-wd+off*7);return base;
+}
+async function genWeek(){
+  const ws=weekStart(S.weekOffset),rows=[];
+  for(const sl of S.slots.filter(x=>x.active)){
+    const st=stu(sl.student_id);if(!st||st.status!=='active')continue;
+    const d=new Date(ws);d.setUTCDate(d.getUTCDate()+sl.day_of_week);
+    const [hh,mm]=sl.start_time.split(':').map(Number);
+    rows.push({student_id:sl.student_id,duration_min:sl.duration_min,
+      starts_at:zonedToUtc(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate(),hh,mm,S.tz).toISOString()});
+  }
+  if(!rows.length)return alert('ما فيش مواعيد ثابتة. أضف موعد من صفحة الطالب.');
+  const r=await sb.from('tolaab_lessons').upsert(rows,{onConflict:'student_id,starts_at',ignoreDuplicates:true});
+  if(!err(r))load();
+}
+
+/* ---------- الواجهة ---------- */
+function render(){
+  if(!S.user){return renderLogin()}
+  $('#app').innerHTML=`
+  <header><h1>📚 جدول الطلاب</h1>
+    <div class="row"><span class="mut">توقيتك: ${esc(S.tz)}</span>
+    <button class="sm" onclick="editTz()">تغيير</button>
+    <button class="sm" onclick="sb.auth.signOut()">خروج</button></div></header>
+  <nav>${[['today','اليوم'],['week','الأسبوع'],['students','الطلاب'],['goals','الأهداف'],['stats','الحضور']]
+    .map(([k,l])=>`<button class="${S.tab===k?'on':''}" onclick="S.tab='${k}';render()">${l}</button>`).join('')}</nav>
+  <main>${({today:vToday,week:vWeek,students:vStudents,goals:vGoals,stats:vStats})[S.tab]()}</main>`;
+}
+function renderLogin(){
+  $('#app').innerHTML=`<main><div class="card" style="max-width:380px;margin:60px auto">
+  <h1>📚 جدول الطلاب</h1><label>البريد</label><input id="em" type="email" dir="ltr">
+  <label>كلمة المرور</label><input id="pw" type="password" dir="ltr">
+  <p id="msg"></p><div class="row"><button class="pr" onclick="auth('in')">دخول</button>
+  <button onclick="auth('up')">حساب جديد</button></div></div></main>`;
+}
+async function auth(m){
+  const email=$('#em').value,password=$('#pw').value;
+  const r=m==='in'?await sb.auth.signInWithPassword({email,password}):await sb.auth.signUp({email,password});
+  if(r.error)$('#msg').textContent=r.error.message;
+  else if(m==='up'&&!r.data.session)$('#msg').textContent='تحقق من بريدك لتأكيد الحساب ثم سجّل الدخول';
+}
+async function editTz(){
+  const v=prompt('منطقتك الزمنية (IANA)، مثال: Africa/Cairo',S.tz);if(!v)return;
+  try{new Intl.DateTimeFormat('en',{timeZone:v})}catch{return alert('منطقة غير صحيحة')}
+  S.tz=v;await sb.from('tolaab_settings').upsert({user_id:S.user.id,teacher_tz:v});render();
+}
+
+function lessonCard(l){
+  const s=stu(l.student_id);if(!s)return '';
+  const d=new Date(l.starts_at);
+  const wa=s.phone?`<a href="https://wa.me/${s.phone.replace(/\D/g,'')}" target="_blank"><button class="sm ok">واتساب</button></a>`:'';
+  return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${esc(s.country||'')}</span>
+  <span class="tag t-${l.status}">${STATUS[l.status]}</span><span class="sp"></span>${wa}</div>
+  <div class="times"><div><span class="mut">عندك</span><br><b>${fmtT(d,S.tz)}</b></div>
+  <div><span class="mut">عنده (${diffLabel(s.timezone)})</span><br><b>${fmtT(d,s.timezone)}</b> <span class="mut">${fmtD(d,s.timezone)}</span></div>
+  <div><span class="mut">المدة</span><br><b>${l.duration_min} د</b></div></div>
+  <div class="row" style="margin-top:8px">
+  <button class="sm ok" onclick="setSt('${l.id}','present')">حضر</button>
+  <button class="sm no" onclick="setSt('${l.id}','absent')">غاب</button>
+  <button class="sm" onclick="setSt('${l.id}','excused')">بعذر</button>
+  <button class="sm" onclick="setSt('${l.id}','cancelled')">إلغاء</button>
+  <button class="sm" onclick="lessonNote('${l.id}')">ملاحظة</button>
+  <button class="sm" onclick="delLesson('${l.id}')">🗑</button></div>
+  ${l.note?`<div class="mut" style="margin-top:6px">📝 ${esc(l.note)}</div>`:''}</div>`;
+}
+function vToday(){
+  const k=dayKey(new Date(),S.tz);
+  const ls=S.lessons.filter(l=>dayKey(new Date(l.starts_at),S.tz)===k);
+  return `<div class="row" style="margin:10px 0"><h2 style="margin:0">حصص اليوم</h2><span class="sp"></span>
+    <button class="sm" onclick="addLesson()">+ حصة</button></div>`+(ls.map(lessonCard).join('')||'<p class="mut">لا حصص اليوم</p>');
+}
+function vWeek(){
+  const ws=weekStart(S.weekOffset),we=new Date(ws);we.setUTCDate(we.getUTCDate()+7);
+  const lo=zonedToUtc(ws.getUTCFullYear(),ws.getUTCMonth()+1,ws.getUTCDate(),0,0,S.tz),
+        hi=zonedToUtc(we.getUTCFullYear(),we.getUTCMonth()+1,we.getUTCDate(),0,0,S.tz);
+  const ls=S.lessons.filter(l=>{const d=new Date(l.starts_at);return d>=lo&&d<hi});
+  const groups={};ls.forEach(l=>(groups[dayKey(new Date(l.starts_at),S.tz)]??=[]).push(l));
+  return `<div class="row" style="margin:10px 0"><button class="sm" onclick="S.weekOffset--;render()">→ السابق</button>
+  <b>أسبوع ${fmtD(lo,S.tz)}</b><button class="sm" onclick="S.weekOffset++;render()">التالي ←</button><span class="sp"></span>
+  <button class="sm pr" onclick="genWeek()">توليد حصص الأسبوع</button></div>`+
+  (Object.keys(groups).sort().map(k=>`<h3>${fmtD(new Date(groups[k][0].starts_at),S.tz)}</h3>`+groups[k].map(lessonCard).join('')).join('')||'<p class="mut">لا حصص. اضغط «توليد حصص الأسبوع» بعد إضافة مواعيد الطلاب.</p>');
+}
+function vStudents(){
+  return `<div class="row" style="margin:10px 0"><h2 style="margin:0">الطلاب (${S.students.length})</h2><span class="sp"></span>
+  <button class="pr sm" onclick="studentForm()">+ طالب</button></div>`+S.students.map(s=>{
+    const sl=S.slots.filter(x=>x.student_id===s.id);
+    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${esc(s.country||'')} · ${esc(s.timezone)} · ${diffLabel(s.timezone)}</span>
+    <span class="sp"></span><button class="sm" onclick="studentForm('${s.id}')">تعديل</button></div>
+    <div class="mut">💰 ${s.price??'—'} ${esc(s.currency||'')} / ${s.price_unit==='month'?'شهر':'حصة'} · ${s.phone?`<span dir="ltr">${esc(s.phone)}</span>`:'بلا رقم'} ${s.status!=='active'?`· <b>${s.status==='paused'?'متوقف مؤقتا':'متوقف'}</b>`:''}</div>
+    <div style="margin-top:6px">${sl.map(x=>`<span class="tag">${DAYS[x.day_of_week]} ${x.start_time.slice(0,5)} (${x.duration_min}د) <a href="#" onclick="delSlot('${x.id}');return false">✕</a></span> `).join('')}
+    <button class="sm" onclick="slotForm('${s.id}')">+ موعد ثابت</button></div></div>`}).join('');
+}
+function vGoals(){
+  return `<div class="row" style="margin:10px 0"><h2 style="margin:0">الأهداف والخطة</h2></div>`+S.students.map(s=>{
+    const g=S.goals.filter(x=>x.student_id===s.id);
+    const done=g.filter(x=>x.status==='done').length;
+    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="mut">${done}/${g.length} منجز</span><span class="sp"></span>
+    <button class="sm" onclick="goalForm('${s.id}')">+ هدف</button></div>`+g.map(x=>`<div class="row" style="margin-top:6px">
+      <select style="width:auto" onchange="goalSt('${x.id}',this.value)">${['todo','doing','done'].map(v=>`<option value="${v}" ${x.status===v?'selected':''}>${{todo:'لم يبدأ',doing:'جارٍ',done:'تم'}[v]}</option>`).join('')}</select>
+      <span style="${x.status==='done'?'text-decoration:line-through;color:var(--mut)':''}">${esc(x.title)}</span>
+      ${x.target_date?`<span class="mut">حتى ${x.target_date}</span>`:''}<span class="sp"></span>
+      <button class="sm" onclick="delGoal('${x.id}')">🗑</button></div>${x.details?`<div class="mut">${esc(x.details)}</div>`:''}`).join('')+`</div>`}).join('');
+}
+function vStats(){
+  return `<h2>إحصائيات الحضور</h2>`+S.students.map(s=>{
+    const ls=S.lessons.filter(l=>l.student_id===s.id);
+    const c=k=>ls.filter(l=>l.status===k).length,p=c('present'),a=c('absent'),e=c('excused');
+    const t=p+a+e,pct=t?Math.round(p/t*100):0;
+    return `<div class="card"><div class="row"><b>${esc(s.name)}</b><span class="sp"></span><b>${pct}%</b></div>
+    <div class="mut">حضر ${p} · غاب ${a} · بعذر ${e} · مجدولة ${c('scheduled')} · ملغاة ${c('cancelled')}</div></div>`}).join('');
+}
+
+/* ---------- نماذج وعمليات ---------- */
+function modal(html){
+  let d=$('#dlg');if(!d){d=document.createElement('dialog');d.id='dlg';document.body.appendChild(d)}
+  d.innerHTML=html;d.showModal();return d;
+}
+const close=()=>$('#dlg').close();
+function studentForm(id){
+  const s=id?stu(id):{name:'',phone:'',country:'',timezone:'Africa/Cairo',price:'',currency:'USD',price_unit:'session',status:'active',notes:''};
+  modal(`<h3>${id?'تعديل':'طالب جديد'}</h3>
+  <label>الاسم</label><input id="f_name" value="${esc(s.name)}">
+  <label>الهاتف (مع كود الدولة، مثال 201001234567)</label><input id="f_phone" dir="ltr" value="${esc(s.phone)}">
+  <label>الدولة</label><select id="f_country" onchange="pickCountry()"><option value="">— اختر —</option>
+   ${Object.keys(COUNTRIES).map(c=>`<option ${s.country===c?'selected':''}>${c}</option>`).join('')}</select>
+  <label>المنطقة الزمنية (تُملأ تلقائيا، ويمكن تعديلها)</label><input id="f_tz" dir="ltr" value="${esc(s.timezone)}" oninput="tzPrev()">
+  <div class="mut" id="tzprev"></div>
+  <div class="grid"><div><label>السعر</label><input id="f_price" type="number" step="0.01" value="${s.price??''}"></div>
+  <div><label>العملة</label><input id="f_cur" value="${esc(s.currency)}"></div>
+  <div><label>لكل</label><select id="f_unit"><option value="session" ${s.price_unit==='session'?'selected':''}>حصة</option><option value="month" ${s.price_unit==='month'?'selected':''}>شهر</option></select></div>
+  <div><label>الحالة</label><select id="f_status">${['active','paused','stopped'].map(v=>`<option value="${v}" ${s.status===v?'selected':''}>${{active:'نشط',paused:'متوقف مؤقتا',stopped:'متوقف'}[v]}</option>`).join('')}</select></div></div>
+  <label>ملاحظات</label><textarea id="f_notes" rows="2">${esc(s.notes)}</textarea>
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveStudent('${id||''}')">حفظ</button><button onclick="close()">إلغاء</button><span class="sp"></span>
+  ${id?`<button class="no" onclick="delStudent('${id}')">حذف</button>`:''}</div>`);tzPrev();
+}
+function pickCountry(){const c=$('#f_country').value;if(COUNTRIES[c]){$('#f_tz').value=COUNTRIES[c];tzPrev()}}
+function tzPrev(){
+  const tz=$('#f_tz').value;let t='';
+  try{new Intl.DateTimeFormat('en',{timeZone:tz});t=`الفرق: ${diffLabel(tz)} — الآن عنده ${fmtT(new Date(),tz)}`}catch{t='منطقة غير صحيحة'}
+  $('#tzprev').textContent=t;
+}
+async function saveStudent(id){
+  const tz=$('#f_tz').value;try{new Intl.DateTimeFormat('en',{timeZone:tz})}catch{return alert('منطقة زمنية غير صحيحة')}
+  if(!$('#f_name').value.trim())return alert('الاسم مطلوب');
+  const row={name:$('#f_name').value.trim(),phone:$('#f_phone').value.trim()||null,country:$('#f_country').value||null,timezone:tz,
+    price:$('#f_price').value===''?null:+$('#f_price').value,currency:$('#f_cur').value,price_unit:$('#f_unit').value,status:$('#f_status').value,notes:$('#f_notes').value||null};
+  const r=id?await sb.from('tolaab_students').update(row).eq('id',id):await sb.from('tolaab_students').insert(row);
+  if(!err(r)){close();load()}
+}
+async function delStudent(id){if(confirm('حذف الطالب وكل حصصه وأهدافه؟')){const r=await sb.from('tolaab_students').delete().eq('id',id);if(!err(r)){close();load()}}}
+
+function slotForm(sid){
+  const s=stu(sid);
+  modal(`<h3>موعد ثابت — ${esc(s.name)}</h3>
+  <label>اليوم (بتوقيتك)</label><select id="sl_day">${DAYS.map((d,i)=>`<option value="${i}">${d}</option>`).join('')}</select>
+  <label>الوقت عندك</label><input id="sl_time" type="time" value="16:00" oninput="slPrev('${sid}')">
+  <div class="mut" id="slprev"></div>
+  <label>المدة (دقيقة)</label><input id="sl_dur" type="number" value="60">
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveSlot('${sid}')">حفظ</button><button onclick="close()">إلغاء</button></div>`);slPrev(sid);
+}
+function slPrev(sid){
+  const s=stu(sid),[h,m]=($('#sl_time').value||'0:0').split(':').map(Number);
+  const p=parts(new Date(),S.tz),d=zonedToUtc(+p.year,+p.month,+p.day,h,m,S.tz);
+  $('#slprev').textContent=`عنده الساعة ${fmtT(d,s.timezone)} (${diffLabel(s.timezone)})`;
+}
+async function saveSlot(sid){
+  const r=await sb.from('tolaab_slots').insert({student_id:sid,day_of_week:+$('#sl_day').value,start_time:$('#sl_time').value,duration_min:+$('#sl_dur').value||60});
+  if(!err(r)){close();load()}
+}
+async function delSlot(id){const r=await sb.from('tolaab_slots').delete().eq('id',id);if(!err(r))load()}
+
+function addLesson(){
+  modal(`<h3>حصة إضافية</h3><label>الطالب</label><select id="l_st">${S.students.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>
+  <label>التاريخ (بتوقيتك)</label><input id="l_d" type="date" value="${dayKey(new Date(),S.tz)}">
+  <label>الوقت عندك</label><input id="l_t" type="time" value="16:00" oninput="lPrev()"><div class="mut" id="lprev"></div>
+  <label>المدة</label><input id="l_dur" type="number" value="60">
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveLesson()">حفظ</button><button onclick="close()">إلغاء</button></div>`);
+  $('#l_st').onchange=lPrev;lPrev();
+}
+function lDate(){const [y,m,d]=$('#l_d').value.split('-').map(Number),[h,mi]=$('#l_t').value.split(':').map(Number);return zonedToUtc(y,m,d,h,mi,S.tz)}
+function lPrev(){const s=stu($('#l_st').value);if(s&&$('#l_d').value)$('#lprev').textContent=`عنده: ${fmt(lDate(),s.timezone)}`}
+async function saveLesson(){
+  const r=await sb.from('tolaab_lessons').insert({student_id:$('#l_st').value,starts_at:lDate().toISOString(),duration_min:+$('#l_dur').value||60});
+  if(!err(r)){close();load()}
+}
+async function setSt(id,status){const r=await sb.from('tolaab_lessons').update({status}).eq('id',id);if(!err(r))load()}
+async function lessonNote(id){
+  const l=S.lessons.find(x=>x.id===id),v=prompt('ملاحظة الحصة (ما تم، الواجب...)',l.note||'');if(v===null)return;
+  const r=await sb.from('tolaab_lessons').update({note:v||null}).eq('id',id);if(!err(r))load();
+}
+async function delLesson(id){if(confirm('حذف الحصة؟')){const r=await sb.from('tolaab_lessons').delete().eq('id',id);if(!err(r))load()}}
+
+function goalForm(sid){
+  modal(`<h3>هدف جديد — ${esc(stu(sid).name)}</h3><label>الهدف</label><input id="g_t">
+  <label>تفاصيل / خطة</label><textarea id="g_d" rows="3"></textarea><label>تاريخ مستهدف</label><input id="g_dt" type="date">
+  <div class="row" style="margin-top:12px"><button class="pr" onclick="saveGoal('${sid}')">حفظ</button><button onclick="close()">إلغاء</button></div>`);
+}
+async function saveGoal(sid){
+  if(!$('#g_t').value.trim())return;
+  const r=await sb.from('tolaab_goals').insert({student_id:sid,title:$('#g_t').value.trim(),details:$('#g_d').value||null,target_date:$('#g_dt').value||null});
+  if(!err(r)){close();load()}
+}
+async function goalSt(id,status){const r=await sb.from('tolaab_goals').update({status}).eq('id',id);if(!err(r))load()}
+async function delGoal(id){const r=await sb.from('tolaab_goals').delete().eq('id',id);if(!err(r))load()}
+
+/* ---------- تشغيل ---------- */
+sb.auth.onAuthStateChange((_e,session)=>{
+  S.user=session?.user||null;
+  if(S.user)load();else render();
+});
+</script>
+</body>
+</html>
